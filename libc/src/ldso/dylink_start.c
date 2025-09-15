@@ -1,13 +1,13 @@
 #include <sys/types.h>
 #include <elf.h>
 #include "syscall.h"
-#include "osx_dl.h"
+#include "dl.h"
 
 __asm__(
 	".text \n"
-	".global osx_dlstart\n"
-	".type osx_dlstart,%function\n"
-	"osx_dlstart:\n"
+	".global _dlstart\n"
+	".type _dlstart,%function\n"
+	"_dlstart:\n"
 	"	mov x29, #0\n"
 	"	mov x30, #0\n"
 	"	mov x0, sp\n"
@@ -16,7 +16,7 @@ __asm__(
 	"	adrp x1, _DYNAMIC\n"
 	"	add x1, x1, #:lo12:_DYNAMIC\n"
 	"	and sp, x0, #-16\n"
-	"	b osx_dlstart_c\n"
+	"	b _dlstart_c\n"
 );
 
 #ifndef GETFUNCSYM
@@ -28,7 +28,7 @@ __asm__(
 	} while (0)
 #endif
 
-hidden void osx_dlstart_c(size_t *sp, size_t *dynv)
+hidden void _dlstart_c(size_t *sp, size_t *dynv)
 {
 	size_t i, aux[AUX_CNT], dyn[DYN_CNT];
 	size_t *rel, rel_size, base;
@@ -99,7 +99,7 @@ hidden void osx_dlstart_c(size_t *sp, size_t *dynv)
 		}
 	}
 
-	stage2_func __osx_dl_s1;
-	GETFUNCSYM(&__osx_dl_s1, osx_dl_s1, base + dyn[DT_PLTGOT]);
-	__osx_dl_s1((unsigned char *)base, sp);
+	stage2_func __dl_s1;
+	GETFUNCSYM(&__dl_s1, dl_s1, base + dyn[DT_PLTGOT]);
+	__dl_s1((unsigned char *)base, sp);
 }
