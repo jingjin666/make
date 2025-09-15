@@ -1,7 +1,7 @@
 #include <sys/types.h>
 #include <elf.h>
 #include "syscall.h"
-#include "dl.h"
+#include "osx_dl.h"
 
 __asm__(
 	".text \n"
