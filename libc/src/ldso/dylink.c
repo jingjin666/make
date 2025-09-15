@@ -23,7 +23,7 @@ struct dso {
 	size_t ndeps_direct;
 };
 
-static struct dso osx_ldso;
+static struct dso rt_ldso;
 static struct dso *head, *tail, *syms_tail;
 
 int data1 = 9527;
@@ -204,7 +204,7 @@ static void relocate(struct dso *ldso, Rel *rel, size_t rel_size)
 	size_t rel_end = (size_t)(rel + rel_size / sizeof(*rel));
 	int skip_relative = 0;
 
-	if (ldso == &osx_ldso) {
+	if (ldso == &rt_ldso) {
 		skip_relative = 1;
 	}
 
@@ -275,7 +275,7 @@ static void relocate_a(struct dso *ldso, Rela *rel, size_t rel_size)
 	size_t rel_end = (size_t)(rel + rel_size / sizeof(*rel));
 	int skip_relative = 0;
 
-	if (ldso == &osx_ldso) {
+	if (ldso == &rt_ldso) {
 		skip_relative = 1;
 	}
 
@@ -434,16 +434,16 @@ static struct dso *const no_deps[1];
 
 static struct dso *dl_load_library(const char *name, struct dso *needed_by)
 {
-	// __syscall6(499, name, osx_ldso.name, 0, 0, 0, __LINE__);
-	if (strcmp(name, osx_ldso.name) == 0) {
+	// __syscall6(499, name, rt_ldso.name, 0, 0, 0, __LINE__);
+	if (strcmp(name, rt_ldso.name) == 0) {
 		// __syscall6(499, 0, 0, 0, 0, 0, __LINE__);
-		if (!osx_ldso.prev) {
+		if (!rt_ldso.prev) {
 			// __syscall6(499, 0, 0, 0, 0, 0, __LINE__);
-			tail->next = &osx_ldso;
-			osx_ldso.prev = tail;
-			tail = &osx_ldso;
+			tail->next = &rt_ldso;
+			rt_ldso.prev = tail;
+			tail = &rt_ldso;
 		}
-		return &osx_ldso;
+		return &rt_ldso;
 	}
 
 	return NULL;
@@ -516,16 +516,16 @@ static void dl_load_deps(struct dso *ldso)
 	}
 }
 
-static struct dso np;
+static struct dso main_ldso;
 void _dl_s2(size_t *sp, size_t *auxv)
 {
-	struct dso *ldso = &np;
+	struct dso *ldso = &main_ldso;
 	int argc = *sp;
 	char **argv = (void *)(sp+1);
 	size_t aux[AUX_CNT];
 
 	decode_vec(auxv, aux, AUX_CNT);
-	if (aux[AT_PHDR] != (size_t)osx_ldso.phdr) {
+	if (aux[AT_PHDR] != (size_t)rt_ldso.phdr) {
 		ldso->phdr = (Phdr *)aux[AT_PHDR];
 		ldso->phnum = aux[AT_PHNUM];
 		ldso->phentsize = aux[AT_PHENT];
@@ -539,8 +539,8 @@ void _dl_s2(size_t *sp, size_t *auxv)
 				ldso->base = (unsigned char *)(aux[AT_PHDR] - phdr->p_vaddr);
 				// __syscall6(499, 7, aux[AT_PHDR], phdr->p_vaddr, 0, 0, 0);
 			} else if (phdr->p_type == PT_INTERP) {
-				osx_ldso.name = (char *)ldso_addr(ldso, phdr->p_vaddr);
-				// __syscall6(499, 7, osx_ldso.name, phdr->p_vaddr, 0, 0, 0);
+				rt_ldso.name = (char *)ldso_addr(ldso, phdr->p_vaddr);
+				// __syscall6(499, 7, rt_ldso.name, phdr->p_vaddr, 0, 0, 0);
 			} else if (phdr->p_type == PT_DYNAMIC) {
 				ldso->dynv = (size_t *)ldso_addr(ldso, phdr->p_vaddr);
 				// __syscall6(499, 7, ldso->dynv, phdr->p_vaddr, 0, 0, 0);
@@ -558,7 +558,7 @@ void _dl_s2(size_t *sp, size_t *auxv)
 
 	head = tail = syms_tail = ldso;
 
-	osx_ldso.deps = (struct dso **)no_deps;
+	rt_ldso.deps = (struct dso **)no_deps;
 
 	dl_load_deps(ldso);
 
@@ -575,7 +575,7 @@ void _dl_s2(size_t *sp, size_t *auxv)
 
 hidden void _dl_s1(unsigned char *base, size_t *sp)
 {
-	struct dso *ldso = &osx_ldso;
+	struct dso *ldso = &rt_ldso;
 	size_t *auxv;
 
 	for (auxv = sp + 1 + *sp + 1; *auxv; auxv++) {
