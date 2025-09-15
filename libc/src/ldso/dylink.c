@@ -517,7 +517,7 @@ static void dl_load_deps(struct dso *ldso)
 }
 
 static struct dso np;
-void osx_dl_s2(size_t *sp, size_t *auxv)
+void _dl_s2(size_t *sp, size_t *auxv)
 {
 	struct dso *ldso = &np;
 	int argc = *sp;
@@ -573,7 +573,7 @@ void osx_dl_s2(size_t *sp, size_t *auxv)
 	__asm__ __volatile__("mov sp, %1 ; br %0" : : "r"((void *)aux[AT_ENTRY]), "r"(argv - 1) : "memory");
 }
 
-hidden void osx_dl_s1(unsigned char *base, size_t *sp)
+hidden void _dl_s1(unsigned char *base, size_t *sp)
 {
 	struct dso *ldso = &osx_ldso;
 	size_t *auxv;
@@ -604,5 +604,5 @@ hidden void osx_dl_s1(unsigned char *base, size_t *sp)
 	dl_relocate(ldso);
 	relocate_test();
 
-	osx_dl_s2(sp, auxv);
+	_dl_s2(sp, auxv);
 }
