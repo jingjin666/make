@@ -1,6 +1,7 @@
-#include <dl_types.h>
+#include <sys/types.h>
 #include <elf.h>
-#include <syscall_arch.h>
+#include "syscall.h"
+#include "dl.h"
 
 struct dso {
 	unsigned char *base;
@@ -9,13 +10,13 @@ struct dso {
 	struct dso *next, *prev;
 	char relocated;
 
-	Elf_Phdr *phdr;
+	Phdr *phdr;
 	int phnum;
 	size_t phentsize;
-	Elf_Sym *syms;
-	Elf_Symndx *hashtab;
-	u32 *ghashtab;
-	s16 *versym;
+	Sym *syms;
+	Symndx *hashtab;
+	uint32_t *ghashtab;
+	int16_t *versym;
 	char *strings;
 	struct dso *syms_next, *lazy_next;
 	struct dso **deps, *needed_by;
@@ -44,14 +45,14 @@ static void relocate_test(void)
 }
 
 struct symdef {
-	Elf_Sym *sym;
+	Sym *sym;
 	struct dso *dso;
 };
 
-static u32 sysv_hash(const char *s0)
+static uint32_t sysv_hash(const char *s0)
 {
 	const unsigned char *s = (void *)s0;
-	u32 h = 0;
+	uint32_t h = 0;
 	while (*s) {
 		h = 16*h + *s++;
 		h ^= h>>24 & 0xf0;
@@ -59,10 +60,10 @@ static u32 sysv_hash(const char *s0)
 	return h & 0xfffffff;
 }
 
-static u32 gnu_hash(const char *s0)
+static uint32_t gnu_hash(const char *s0)
 {
 	const unsigned char *s = (void *)s0;
-	u32 h = 5381;
+	uint32_t h = 5381;
 	for (; *s; s++)
 		h += h*32 + *s;
 	return h;
@@ -78,11 +79,11 @@ static int dl_strcmp(const char *l, const char *r)
 
 #define strcmp(l, r) dl_strcmp(l, r)
 
-static Elf_Sym *sysv_lookup(const char *s, u32 h, struct dso *dso)
+static Sym *sysv_lookup(const char *s, uint32_t h, struct dso *dso)
 {
 	size_t i;
-	Elf_Sym *syms = dso->syms;
-	Elf_Symndx *hashtab = dso->hashtab;
+	Sym *syms = dso->syms;
+	Symndx *hashtab = dso->hashtab;
 	char *strings = dso->strings;
 	// __syscall6(499, 14, syms, hashtab, strings, dso->versym, 0);
 	for (i = hashtab[2 + h % hashtab[0]]; i; i = hashtab[2 + hashtab[0] + i]) {
@@ -94,20 +95,20 @@ static Elf_Sym *sysv_lookup(const char *s, u32 h, struct dso *dso)
 	return 0;
 }
 
-static Elf_Sym *gnu_lookup(u32 h1, u32 *hashtab, struct dso *dso, const char *s)
+static Sym *gnu_lookup(uint32_t h1, uint32_t *hashtab, struct dso *dso, const char *s)
 {
-	u32 nbuckets = hashtab[0];
-	u32 *buckets = hashtab + 4 + hashtab[2] * (sizeof(size_t) / 4);
-	u32 i = buckets[h1 % nbuckets];
+	uint32_t nbuckets = hashtab[0];
+	uint32_t *buckets = hashtab + 4 + hashtab[2] * (sizeof(size_t) / 4);
+	uint32_t i = buckets[h1 % nbuckets];
 
 	if (!i) {
 		return 0;
 	}
 
-	u32 *hashval = buckets + nbuckets + (i - hashtab[1]);
+	uint32_t *hashval = buckets + nbuckets + (i - hashtab[1]);
 
 	for (h1 |= 1; ; i++) {
-		u32 h2 = *hashval++;
+		uint32_t h2 = *hashval++;
 		if ((h1 == (h2|1)) && (!dso->versym || dso->versym[i] >= 0)
 		    && !strcmp(s, dso->strings + dso->syms[i].st_name)) {
 			return dso->syms + i;
@@ -120,7 +121,7 @@ static Elf_Sym *gnu_lookup(u32 h1, u32 *hashtab, struct dso *dso, const char *s)
 	return 0;
 }
 
-static Elf_Sym *gnu_lookup_filtered(u32 h1, u32 *hashtab, struct dso *dso, const char *s, u32 fofs, size_t fmask)
+static Sym *gnu_lookup_filtered(uint32_t h1, uint32_t *hashtab, struct dso *dso, const char *s, uint32_t fofs, size_t fmask)
 {
 	const size_t *bloomwords = (const void *)(hashtab+4);
 	size_t f = bloomwords[fofs & (hashtab[2]-1)];
@@ -145,13 +146,13 @@ static Elf_Sym *gnu_lookup_filtered(u32 h1, u32 *hashtab, struct dso *dso, const
 
 static inline struct symdef find_sym2(struct dso *dso, const char *s, int need_def, int use_deps)
 {
-	u32 h = 0, gh = gnu_hash(s), gho = gh / (8*sizeof(size_t)), *ght;
+	uint32_t h = 0, gh = gnu_hash(s), gho = gh / (8*sizeof(size_t)), *ght;
 	size_t ghm = 1ul << gh % (8*sizeof(size_t));
 	struct symdef def = {0};
 	struct dso **deps = use_deps ? dso->deps : 0;
 	for (; dso; dso = use_deps ? *deps++ : dso->syms_next) {
 		// __syscall6(499, 11, 0, 0, 0, 0, 0);
-		Elf_Sym *sym;
+		Sym *sym;
 		ght = dso->ghashtab;
 		if (ght) {
 			// __syscall6(499, 12, 0, 0, 0, 0, 0);
@@ -196,18 +197,18 @@ static struct symdef find_sym(struct dso *dso, const char *s, int need_def)
 	return find_sym2(dso, s, need_def, 0);
 }
 
-static void relocate(struct dso *ldso, Elf_Rel *rel, size_t rel_size)
+static void relocate(struct dso *ldso, Rel *rel, size_t rel_size)
 {
 	struct symdef def = {0};
 	struct dso *ctx = NULL;
-	size_t rel_end = rel + rel_size / sizeof(*rel);
+	size_t rel_end = (size_t)(rel + rel_size / sizeof(*rel));
 	int skip_relative = 0;
 
 	if (ldso == &osx_ldso) {
 		skip_relative = 1;
 	}
 
-	for (; rel < rel_end; rel++) {
+	for (; (size_t)rel < rel_end; rel++) {
 		if (skip_relative && IS_RELATIVE(rel->r_info)) {
 			__syscall6(499, 0, 0, 0, 0, 0, __LINE__);
 			continue;
@@ -216,8 +217,8 @@ static void relocate(struct dso *ldso, Elf_Rel *rel, size_t rel_size)
 		size_t index, type, *where, addend;
 
 		where = (size_t *)ldso_addr(ldso, rel->r_offset);
-		index = ELF64_R_SYM(rel->r_info);
-		type = ELF64_R_TYPE(rel->r_info);
+		index = R_SYM(rel->r_info);
+		type = R_TYPE(rel->r_info);
 		if (type == R_AARCH64_GLOB_DAT || R_AARCH64_JUMP_SLOT || R_AARCH64_COPY) {
 			addend = 0;
 		} else {
@@ -229,7 +230,7 @@ static void relocate(struct dso *ldso, Elf_Rel *rel, size_t rel_size)
 		}
 
 		if (index) {
-			Elf_Sym *dynsym = ldso->syms + index;
+			Sym *dynsym = ldso->syms + index;
 			const char *name = ldso->strings + dynsym->st_name;
 
 			if (type == R_AARCH64_COPY) {
@@ -267,18 +268,18 @@ static void relocate(struct dso *ldso, Elf_Rel *rel, size_t rel_size)
 	}
 }
 
-static void relocate_a(struct dso *ldso, Elf_Rela *rel, size_t rel_size)
+static void relocate_a(struct dso *ldso, Rela *rel, size_t rel_size)
 {
 	struct symdef def = {0};
 	struct dso *ctx = NULL;
-	size_t rel_end = rel + rel_size / sizeof(*rel);
+	size_t rel_end = (size_t)(rel + rel_size / sizeof(*rel));
 	int skip_relative = 0;
 
 	if (ldso == &osx_ldso) {
 		skip_relative = 1;
 	}
 
-	for (; rel < rel_end; rel++) {
+	for (; (size_t)rel < rel_end; rel++) {
 		if (skip_relative && IS_RELATIVE(rel->r_info)) {
 			// __syscall6(499, 0, 0, 0, 0, 0, __LINE__);
 			continue;
@@ -287,8 +288,8 @@ static void relocate_a(struct dso *ldso, Elf_Rela *rel, size_t rel_size)
 		size_t index, type, *where, addend;
 
 		where = (size_t *)ldso_addr(ldso, rel->r_offset);
-		index = ELF64_R_SYM(rel->r_info);
-		type = ELF64_R_TYPE(rel->r_info);
+		index = R_SYM(rel->r_info);
+		type = R_TYPE(rel->r_info);
 		addend = rel->r_addend;
 
 		if (type == R_AARCH64_NONE) {
@@ -296,7 +297,7 @@ static void relocate_a(struct dso *ldso, Elf_Rela *rel, size_t rel_size)
 		}
 
 		if (index) {
-			Elf_Sym *dynsym = ldso->syms + index;
+			Sym *dynsym = ldso->syms + index;
 			const char *name = ldso->strings + dynsym->st_name;
 
 			if (type == R_AARCH64_COPY) {
@@ -366,16 +367,16 @@ static void decode_dyn(struct dso *ldso)
 	size_t dyn[DYN_CNT];
 	decode_vec(ldso->dynv, dyn, DYN_CNT);
 
-	ldso->syms = (Elf_Sym *)ldso_addr(ldso, dyn[DT_SYMTAB]);
-	ldso->strings = ldso_addr(ldso, dyn[DT_STRTAB]);
+	ldso->syms = (Sym *)ldso_addr(ldso, dyn[DT_SYMTAB]);
+	ldso->strings = (char *)ldso_addr(ldso, dyn[DT_STRTAB]);
 	if (dyn[0]&(1<<DT_HASH)) {
-		ldso->hashtab = ldso_addr(ldso, dyn[DT_HASH]);
+		ldso->hashtab = (Symndx *)ldso_addr(ldso, dyn[DT_HASH]);
 	}
 	if (search_vec(ldso->dynv, dyn, DT_GNU_HASH)) {
-		ldso->ghashtab = ldso_addr(ldso, *dyn);
+		ldso->ghashtab = (uint32_t *)ldso_addr(ldso, *dyn);
 	}
 	if (search_vec(ldso->dynv, dyn, DT_VERSYM)) {
-		ldso->versym = ldso_addr(ldso, *dyn);
+		ldso->versym = (int16_t *)ldso_addr(ldso, *dyn);
 	}
 }
 
@@ -392,30 +393,30 @@ static void dl_relocate(struct dso *ldso)
 		size_t dyn[DYN_CNT];
 		decode_vec(ldso->dynv, dyn, DYN_CNT);
 
-		ldso->syms = (Elf_Sym *)ldso_addr(ldso, dyn[DT_SYMTAB]);
-		ldso->strings = ldso_addr(ldso, dyn[DT_STRTAB]);
+		ldso->syms = (Sym *)ldso_addr(ldso, dyn[DT_SYMTAB]);
+		ldso->strings = (char *)ldso_addr(ldso, dyn[DT_STRTAB]);
 		if (dyn[0]&(1<<DT_HASH)) {
-			ldso->hashtab = ldso_addr(ldso, dyn[DT_HASH]);
+			ldso->hashtab = (Symndx *)ldso_addr(ldso, dyn[DT_HASH]);
 		}
 		if (search_vec(ldso->dynv, dyn, DT_GNU_HASH)) {
-			ldso->ghashtab = ldso_addr(ldso, *dyn);
+			ldso->ghashtab = (uint32_t *)ldso_addr(ldso, *dyn);
 		}
 		if (search_vec(ldso->dynv, dyn, DT_VERSYM)) {
-			ldso->versym = ldso_addr(ldso, *dyn);
+			ldso->versym = (int16_t *)ldso_addr(ldso, *dyn);
 		}
 
 		// __syscall6(499, 1, dyn[DT_PLTREL], dyn[DT_PLTRELSZ], 0, 0, __LINE__);
 		if (dyn[DT_PLTREL] == DT_RELA) {
-			relocate_a(ldso, (Elf_Rela *)ldso_addr(ldso, dyn[DT_JMPREL]), dyn[DT_PLTRELSZ]);
+			relocate_a(ldso, (Rela *)ldso_addr(ldso, dyn[DT_JMPREL]), dyn[DT_PLTRELSZ]);
 		} else {
-			relocate(ldso, (Elf_Rel *)ldso_addr(ldso, dyn[DT_JMPREL]), dyn[DT_PLTRELSZ]);
+			relocate(ldso, (Rel *)ldso_addr(ldso, dyn[DT_JMPREL]), dyn[DT_PLTRELSZ]);
 		}
 
 		// __syscall6(499, 1, dyn[DT_RELSZ], 0, 0, 0, __LINE__);
-		relocate(ldso, (Elf_Rel *)ldso_addr(ldso, dyn[DT_REL]), dyn[DT_RELSZ]);
+		relocate(ldso, (Rel *)ldso_addr(ldso, dyn[DT_REL]), dyn[DT_RELSZ]);
 
 		// __syscall6(499, 1, dyn[DT_RELASZ], 0, 0, 0, __LINE__);
-		relocate_a(ldso, (Elf_Rela *)ldso_addr(ldso, dyn[DT_RELA]), dyn[DT_RELASZ]);
+		relocate_a(ldso, (Rela *)ldso_addr(ldso, dyn[DT_RELA]), dyn[DT_RELASZ]);
 
 		// __syscall6(499, 1, dyn[DT_RELRSZ], 0, 0, 0, __LINE__);
 
@@ -427,40 +428,6 @@ static size_t ldso_page_size;
 #ifndef PAGE_SIZE
 #define PAGE_SIZE ldso_page_size
 #endif
-
-hidden void osx_dl_s1(unsigned char *base, size_t *sp)
-{
-	struct dso *ldso = &osx_ldso;
-	size_t *auxv;
-
-	for (auxv = sp + 1 + *sp + 1; *auxv; auxv++) {
-		;
-	}
-	auxv++;
-
-	ldso->base = base;
-	Elf_Ehdr *ehdr = (Elf_Ehdr *)ldso->base;
-	ldso->phdr = (Elf_Phdr *)ldso_addr(ldso, ehdr->e_phoff);
-	ldso->phnum = ehdr->e_phnum;
-	ldso->phentsize = ehdr->e_phentsize;
-	search_vec(auxv, &ldso_page_size, AT_PAGESZ);
-
-	Elf_Phdr *phdr = NULL;
-	for (int n = 0; n < ldso->phnum; n++) {
-		phdr = &ldso->phdr[n];
-
-		if (phdr->p_type == PT_DYNAMIC) {
-			ldso->dynv = (size_t *)ldso_addr(ldso, phdr->p_vaddr);
-		}
-	}
-
-	head = ldso;
-
-	dl_relocate(ldso);
-	relocate_test();
-
-	osx_dl_s2(sp, auxv);
-}
 
 static struct dso *builtin_deps[2];
 static struct dso *const no_deps[1];
@@ -555,21 +522,21 @@ void osx_dl_s2(size_t *sp, size_t *auxv)
 	struct dso *ldso = &np;
 	int argc = *sp;
 	char **argv = (void *)(sp+1);
-	size_t i, aux[AUX_CNT];
+	size_t aux[AUX_CNT];
 
 	decode_vec(auxv, aux, AUX_CNT);
-	if (aux[AT_PHDR] != osx_ldso.phdr) {
-		ldso->phdr = (Elf_Phdr *)aux[AT_PHDR];
+	if (aux[AT_PHDR] != (size_t)osx_ldso.phdr) {
+		ldso->phdr = (Phdr *)aux[AT_PHDR];
 		ldso->phnum = aux[AT_PHNUM];
 		ldso->phentsize = aux[AT_PHENT];
 		// __syscall6(499, 7, ldso->phdr, ldso->phnum, 0, 0, 0);
 
-		Elf_Phdr *phdr = NULL;
+		Phdr *phdr = NULL;
 		for (int n = 0; n < ldso->phnum; n++) {
 			phdr = &ldso->phdr[n];
 
 			if (phdr->p_type == PT_PHDR) {
-				ldso->base = aux[AT_PHDR] - phdr->p_vaddr;
+				ldso->base = (unsigned char *)(aux[AT_PHDR] - phdr->p_vaddr);
 				// __syscall6(499, 7, aux[AT_PHDR], phdr->p_vaddr, 0, 0, 0);
 			} else if (phdr->p_type == PT_INTERP) {
 				osx_ldso.name = (char *)ldso_addr(ldso, phdr->p_vaddr);
@@ -601,7 +568,41 @@ void osx_dl_s2(size_t *sp, size_t *auxv)
 	__syscall6(499, 0, 0, 0, 0, 0, __LINE__);
 	dl_relocate(ldso);
 
-	__syscall6(499, aux[AT_ENTRY], argv - 1, 0, 0, 0, __LINE__);
+	__syscall6(499, aux[AT_ENTRY], argc, argv - 1, 0, 0, __LINE__);
 
-	__asm__ __volatile__("mov sp, %1 ; blr %0; ret" : : "r"((void *)aux[AT_ENTRY]), "r"(argv - 1) : "memory");
+	__asm__ __volatile__("mov sp, %1 ; br %0" : : "r"((void *)aux[AT_ENTRY]), "r"(argv - 1) : "memory");
+}
+
+hidden void osx_dl_s1(unsigned char *base, size_t *sp)
+{
+	struct dso *ldso = &osx_ldso;
+	size_t *auxv;
+
+	for (auxv = sp + 1 + *sp + 1; *auxv; auxv++) {
+		;
+	}
+	auxv++;
+
+	ldso->base = base;
+	Ehdr *ehdr = (Ehdr *)ldso->base;
+	ldso->phdr = (Phdr *)ldso_addr(ldso, ehdr->e_phoff);
+	ldso->phnum = ehdr->e_phnum;
+	ldso->phentsize = ehdr->e_phentsize;
+	search_vec(auxv, &ldso_page_size, AT_PAGESZ);
+
+	Phdr *phdr = NULL;
+	for (int n = 0; n < ldso->phnum; n++) {
+		phdr = &ldso->phdr[n];
+
+		if (phdr->p_type == PT_DYNAMIC) {
+			ldso->dynv = (size_t *)ldso_addr(ldso, phdr->p_vaddr);
+		}
+	}
+
+	head = ldso;
+
+	dl_relocate(ldso);
+	relocate_test();
+
+	osx_dl_s2(sp, auxv);
 }
