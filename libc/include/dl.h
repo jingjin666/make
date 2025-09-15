@@ -1,5 +1,5 @@
-#ifndef _INTERNAL_DL_H
-#define _INTERNAL_DL_H
+#ifndef _INCLUDE_DL_H
+#define _INCLUDE_DL_H
 
 #include <features.h>
 #include <elf.h>
