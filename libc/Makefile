@@ -14,7 +14,7 @@ endif
 GLOBAL_DEPS	+= $(MAKEFILE_LIST)
 #$(info GLOBAL_DEPS:$(GLOBAL_DEPS))
 
-SRCS		+=	$(wildcard src/*.c)
+SRCS		+=	$(wildcard src/ldso/*.c)
 
 TARGET 		=	libc.a
 OBJS		=	$(addsuffix .o,$(SRCS))
