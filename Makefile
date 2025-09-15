@@ -19,8 +19,8 @@ LDSCRIPT	=	./linker.lds
 EXTRACFLAGS	+=
 EXTRALDFLAGS	+=	-z max-page-size=4096
 
-INCLUDE_DIRS	+=	../musl-libc/include
-LIB_DIRS	+=	../musl-libc/lib
+INCLUDE_DIRS	+=	./libc/include
+LIB_DIRS	+=	./libc/lib
 
 ifeq ($(MAKECMDGOALS),share)
 EXTRALDFLAGS	+=	--dynamic-linker=libc.so
@@ -30,9 +30,9 @@ endif
 
 LIBS		+=	-lc
 
-EXTRA_LIBS	+=	../musl-libc/lib/crt1.o
-EXTRA_LIBS	+=	../musl-libc/lib/crti.o
-EXTRA_LIBS	+=	../musl-libc/lib/crtn.o
+EXTRA_LIBS	+=	./libc/lib/crt1.o
+EXTRA_LIBS	+=	./libc/lib/crti.o
+EXTRA_LIBS	+=	./libc/lib/crtn.o
 
 $(filter %.c.o,$(OBJS)): %.c.o : %.c $(GLOBAL_DEPS)
 	$(call COMPILE,$<,$@)
